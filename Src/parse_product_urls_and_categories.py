@@ -6,6 +6,8 @@ from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
+from config import CONCURRENCY_LIMIT, DELAY_BETWEEN_PAGES, DELAY_BETWEEN_CATEGORIES
+
 
 # --- НОВЫЕ КОНФИГУРАЦИОННЫЕ ПАРАМЕТРЫ ---
 # Максимальное количество одновременных запросов к сайту
@@ -195,20 +197,29 @@ class ProductLinkParser(GosAptekaParser):
         print(f"✅ Парсинг категории завершен! Всего найдено уникальных товаров: {len(all_links_for_category)}")
         return all_links_for_category
 
+    # В классе ProductLinkParser
     def save_results(self, links: list, base_url: str):
-        """Сохраняет ссылки в файл."""
-        path_parts = urlparse(base_url).path.strip('/').split('/')
-        category_name = path_parts[-1] if path_parts else "products"
-        
-        os.makedirs('category_products', exist_ok=True)
-        filepath = os.path.join('category_products', f"{category_name}.txt")
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            for link in sorted(list(set(links))):
-                f.write(link + '\n')
-        
-        print(f"💾 Результаты сохранены в: {filepath}")
+        """Сохраняет ссылки и URL категории в JSON-файл."""
+        # Получаем имя категории из URL
+        category_name = urlparse(base_url).path.strip('/').split('/')[-1]
 
+        # Получаем "человеческое" название категории из ранее собранной структуры
+        # (Это более сложный шаг, для простоты пока оставим так, но в идеале - искать по URL в структуре)
+
+        os.makedirs('category_products', exist_ok=True)
+        filepath = os.path.join('category_products', f"{category_name}.json")
+
+        output_data = {
+            'category_url': base_url,
+            'category_name_slug': category_name, # Техническое имя категории
+            'product_urls': sorted(list(set(links)))
+        }
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+
+        print(f"💾 Результаты сохранены в JSON: {filepath}")
+        
 async def main():
     """Основная асинхронная функция для запуска парсеров."""
     headers = {

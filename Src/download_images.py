@@ -4,16 +4,9 @@ import os
 import asyncpg
 import httpx
 from PIL import Image
+from config import DB_CONFIG, IMAGES_DIR, CONCURRENCY_LIMIT
 
-# --- НАСТРОЙКИ ---
-IMAGES_DIR = 'static/images/products'
-DB_CONFIG = {
-    'user': 'user_farm',
-    'password': 'password_farm',
-    'database': 'db_farm',
-    'host': 'localhost'
-}
-CONCURRENCY_LIMIT = 10 # Ограничение на одновременные скачивания
+
 
 
 class ImageDownloader:

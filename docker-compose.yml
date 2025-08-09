@@ -1,26 +1,28 @@
 version: '3.8'
 
 services:
-  # Сервис базы данных PostgreSQL с расширением PostGIS
   db:
-    # Используем официальный образ с PostGIS
+    # 1. Берём готовый образ PostgreSQL с поддержкой карт (PostGIS)
     image: postgis/postgis:15-3.4
-    # Имя контейнера для удобства
     container_name: farmnavigator_db
-    # Переменные окружения для настройки БД
-    environment:
-      POSTGRES_USER: user_farm
-      POSTGRES_PASSWORD: password_farm
-      POSTGRES_DB: db_farm
-    # Пробрасываем порт 5432 из контейнера на ваш компьютер
+
+    # 2. Говорим контейнеру, чтобы он взял логин и пароль из файла .env
+    env_file:
+      - ./.env
+
     ports:
       - "5432:5432"
-    # Сохраняем данные БД на вашем диске, чтобы они не терялись при перезапуске контейнера
+
     volumes:
+      # Эта строчка нужна, чтобы данные не терялись после перезапуска
       - postgres_data:/var/lib/postgresql/data
-    # Перезапускать контейнер автоматически в случае сбоя
+
+      # 3. САМОЕ ГЛАВНОЕ:
+      # "Кладём" нашу папку db_init с SQL-скриптом внутрь контейнера.
+      # Docker сам найдёт там init.sql и выполнит его при первом запуске.
+      - ./db_init:/docker-entrypoint-initdb.d
+
     restart: always
 
 volumes:
-  # Определяем "том" для хранения данных
   postgres_data:

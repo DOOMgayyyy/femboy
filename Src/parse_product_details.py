@@ -1,32 +1,18 @@
 import asyncio
 import os
 import re
+import json
 from urllib.parse import urljoin
 
 import asyncpg
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-# --- НАСТРОЙКИ ---
-# Директория, где лежат .txt файлы с URL товаров
-URLS_DIR = 'category_products'
-# Директория для сохранения очищенных изображений
-IMAGES_DIR = 'static/images/products'
-# Параметры для подключения к БД (из docker-compose.yml)
-DB_CONFIG = {
-    'user': 'user_farm',
-    'password': 'password_farm',
-    'database': 'db_farm',
-    'host': 'localhost'
-}
-# Ограничение на количество одновременных задач по парсингу
-CONCURRENCY_LIMIT = 10
-
+from config import DB_CONFIG, IMAGES_DIR, URLS_DIR, CONCURRENCY_LIMIT
 
 class ProductProcessor:
     """
-    Класс для обработки одной карточки товара: парсинг, скачивание изображения
-    и сохранение данных в БД.
+    Класс для обработки одной карточки товара: парсинг и сохранение данных в БД.
     """
     def __init__(self, session: httpx.AsyncClient, db_pool: asyncpg.Pool):
         self.base_url = 'https://gosapteka18.ru'
@@ -36,7 +22,6 @@ class ProductProcessor:
     async def fetch_html(self, url: str) -> str | None:
         """Асинхронно загружает HTML-код страницы."""
         try:
-            # Умеренная задержка перед каждым запросом
             await asyncio.sleep(0.5)
             response = await self.session.get(url, timeout=20)
             response.raise_for_status()
@@ -45,7 +30,7 @@ class ProductProcessor:
             print(f"🚫 Ошибка загрузки {url}: {e}")
             return None
 
-    async def process_product(self, product_url: str):
+    async def process_product(self, product_url: str, category_name: str):
         """Полный цикл обработки товара БЕЗ скачивания изображения."""
         print(f"⏳ Собираем данные для: {product_url}")
         html = await self.fetch_html(product_url)
@@ -62,27 +47,19 @@ class ProductProcessor:
         description_dict = self._get_description(soup)
         description_text = "\n\n".join([f"{k}:\n{v}" for k, v in description_dict.items()])
         
-        # Просто получаем URL изображения, но не скачиваем его
         original_image_url = self._get_image(soup)
 
-        # Логика определения типа остается
-        medicine_type_name = "Общая категория"
+        medicine_type_name = category_name
 
-        # Сохраняем все в базу данных, передавая оригинальный URL
         await self.save_to_db({
             'name': title,
             'description': description_text,
-            'image_url': original_image_url, # <-- ВАЖНО: здесь теперь оригинальный URL
+            'image_url': original_image_url,
             'type_name': medicine_type_name
         })
         
     async def save_to_db(self, data: dict):
-        """
-        Сохраняет данные о товаре в базу данных.
-        Поле image_url теперь содержит ссылку на источник.
-        """
-        # ... (код этого метода остается БЕЗ ИЗМЕНЕНИЙ, т.к. он просто пишет то, что ему передали)
-        # Он просто запишет https://... ссылку в поле image_url.
+        """Сохраняет данные о товаре в базу данных."""
         async with self.db_pool.acquire() as connection:
             async with connection.transaction():
                 type_id = await connection.fetchval(
@@ -108,7 +85,6 @@ class ProductProcessor:
                 )
         print(f"💾 Данные (с URL картинки) для товара '{data['name']}' сохранены в БД.")
 
-    # Вспомогательные методы парсинга (взяты из вашего test.py и адаптированы)
     def _get_title(self, soup: BeautifulSoup) -> str:
         title_tag = soup.select_one('h1.title.headline-main__title.product-card__title')
         return title_tag.get_text(strip=True) if title_tag else ''
@@ -136,38 +112,41 @@ class ProductProcessor:
         return sections
 
 async def main():
-    """Главная функция: читает URL и запускает обработчики."""
-    # Собираем все уникальные URL из всех .txt файлов
-    all_urls = set()
+    """Главная функция: читает URL из JSON и запускает обработчики."""
     if not os.path.exists(URLS_DIR):
-        print(f"❌ Директория '{URLS_DIR}' не найдена. Сначала запустите первый парсер.")
+        print(f"❌ Директория '{URLS_DIR}' не найдена.")
         return
-
-    for filename in os.listdir(URLS_DIR):
-        if filename.endswith('.txt'):
-            with open(os.path.join(URLS_DIR, filename), 'r', encoding='utf-8') as f:
-                all_urls.update(line.strip() for line in f)
-    
-    if not all_urls:
-        print("🤷 Не найдено URL для обработки.")
-        return
-
-    print(f"✅ Найдено {len(all_urls)} уникальных URL для обработки.")
 
     # Создаем пул соединений с БД
     db_pool = await asyncpg.create_pool(**DB_CONFIG)
-    
-    # Создаем семафор для ограничения одновременных запросов
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     
-    async def worker(url, processor):
+    async def worker(url, processor, cat_name):
         async with semaphore:
-            await processor.process_product(url)
+            # Передаем имя категории в обработчик
+            await processor.process_product(url, cat_name)
 
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     async with httpx.AsyncClient(headers=headers, follow_redirects=True) as session:
         processor = ProductProcessor(session, db_pool)
-        tasks = [asyncio.create_task(worker(url, processor)) for url in all_urls]
+        tasks = []
+        
+        # Читаем JSON файлы
+        for filename in os.listdir(URLS_DIR):
+            if filename.endswith('.json'):
+                filepath = os.path.join(URLS_DIR, filename)
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    category_name = data.get('category_name_slug', 'Без категории')
+                    for url in data['product_urls']:
+                        tasks.append(asyncio.create_task(worker(url, processor, category_name)))
+
+        if not tasks:
+            print("🤷 Не найдено URL для обработки.")
+            await db_pool.close()
+            return
+
+        print(f"✅ Найдено {len(tasks)} задач для обработки.")
         await asyncio.gather(*tasks)
 
     await db_pool.close()
